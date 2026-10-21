@@ -1,4 +1,4 @@
-# Rendered by scripts/render.sh -> build/melange.yaml. Do not edit build/ by hand.
+# Rendered by scripts/render.sh -> build/<version>/melange.yaml. Do not edit build/ by hand.
 package:
   name: php-hotfix
   version: "@@VERSION@@"
@@ -102,10 +102,48 @@ pipeline:
 
   - uses: strip
 
+subpackages:
+  - name: php-hotfix-fpm
+    description: "PHP @@VERSION@@ FastCGI Process Manager"
+    dependencies:
+      runtime:
+        - php-hotfix
+    pipeline:
+      - runs: |
+          mkdir -p "${{targets.subpkgdir}}/usr/bin" "${{targets.subpkgdir}}/etc/php"
+          mv "${{targets.destdir}}/usr/bin/php-fpm" "${{targets.subpkgdir}}/usr/bin/"
+          # php-fpm.conf, php-fpm.conf.default, php-fpm.d/
+          mv "${{targets.destdir}}"/etc/php/php-fpm.* "${{targets.subpkgdir}}/etc/php/"
+    test:
+      pipeline:
+        - runs: |
+            php-fpm -v | grep -q "PHP @@VERSION@@ "
+            php-fpm -t -y /etc/php/php-fpm.conf
+
+  - name: php-hotfix-dev
+    description: "PHP @@VERSION@@ headers and phpize, for building extensions"
+    dependencies:
+      runtime:
+        - php-hotfix
+        - autoconf
+        - build-base
+    pipeline:
+      - runs: |
+          mkdir -p "${{targets.subpkgdir}}/usr/bin" "${{targets.subpkgdir}}/usr/lib/php"
+          mv "${{targets.destdir}}/usr/include" "${{targets.subpkgdir}}/usr/"
+          mv "${{targets.destdir}}/usr/lib/php/build" "${{targets.subpkgdir}}/usr/lib/php/"
+          mv "${{targets.destdir}}/usr/bin/phpize" "${{targets.destdir}}/usr/bin/php-config" \
+            "${{targets.subpkgdir}}/usr/bin/"
+    test:
+      pipeline:
+        - runs: |
+            php-config --version | grep -qx "@@VERSION@@"
+            test -f "$(php-config --include-dir)/main/php.h"
+
 test:
   pipeline:
     - runs: |
         php -v
         php -v | grep -q "PHP @@VERSION@@ "
         php -m | grep -qi openssl
-        php-fpm -t -y /etc/php/php-fpm.conf
+        php -r 'exit(extension_loaded("mbstring") && extension_loaded("curl") ? 0 : 1);'

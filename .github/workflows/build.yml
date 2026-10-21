@@ -81,32 +81,46 @@ jobs:
           DIR: ${{ steps.render.outputs.dir }}
         run: |
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
-          tags=("$image:$VERSION-r$EPOCH" "$image:$BRANCH")
-          # A pristine tarball build may also own the bare version tag.
-          [ "$EPOCH" = 0 ] && tags+=("$image:$VERSION")
-          docker run --rm -v "$PWD":/work -w /work -v "$HOME/.docker":/root/.docker:ro "$APKO_IMAGE" \
-            publish "$DIR/apko.yaml" "${tags[@]}" --image-refs "$DIR/image-refs.txt"
-          ref="$(head -n1 "$DIR/image-refs.txt")" # image@sha256:...
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
           {
             echo "### PHP $VERSION-r$EPOCH"
             echo
             echo "- patches applied: ${{ steps.render.outputs.patches }}"
-            echo "- digest: \`$ref\`"
-            printf -- '- tag: `%s`\n' "${tags[@]}"
           } >> "$GITHUB_STEP_SUMMARY"
+          # "" = php CLI image, "-fpm" = php-fpm image
+          for flavor in "" -fpm; do
+            tags=("$image:$VERSION-r$EPOCH$flavor" "$image:$BRANCH$flavor")
+            # A pristine tarball build may also own the bare version tag.
+            [ "$EPOCH" = 0 ] && tags+=("$image:$VERSION$flavor")
+            docker run --rm -v "$PWD":/work -w /work -v "$HOME/.docker":/root/.docker:ro "$APKO_IMAGE" \
+              publish "$DIR/apko$flavor.yaml" "${tags[@]}" --image-refs "$DIR/image-refs$flavor.txt"
+            ref="$(head -n1 "$DIR/image-refs$flavor.txt")" # image@sha256:...
+            echo "ref${flavor//-/_}=$ref" >> "$GITHUB_OUTPUT"
+            {
+              echo "- digest${flavor}: \`$ref\`"
+              printf -- '  - tag: `%s`\n' "${tags[@]}"
+            } >> "$GITHUB_STEP_SUMMARY"
+          done
 
       - name: Smoke test
         env:
           REF: ${{ steps.publish.outputs.ref }}
+          REF_FPM: ${{ steps.publish.outputs.ref_fpm }}
           VERSION: ${{ steps.render.outputs.version }}
         run: |
           docker run --rm "$REF" -v | tee /dev/stderr | grep -q "PHP $VERSION "
-          docker run --rm --entrypoint /usr/bin/php-fpm "$REF" -t -y /etc/php/php-fpm.conf
+          docker run --rm "$REF" -r 'exit(file_exists("/usr/bin/php-fpm") ? 1 : 0);'
+          docker run --rm --entrypoint /usr/bin/php-fpm "$REF_FPM" -t -y /etc/php/php-fpm.conf
+          # fpm must come up as nonroot and stay up
+          docker run -d --name fpm "$REF_FPM"
+          sleep 3
+          docker logs fpm 2>&1 | tee /dev/stderr | grep -q "ready to handle connections"
+          test "$(docker inspect -f '{{.State.Running}}' fpm)" = true
+          docker rm -f fpm
 
       - uses: sigstore/cosign-installer@v3
 
       - name: cosign sign (keyless)
         env:
           REF: ${{ steps.publish.outputs.ref }}
-        run: cosign sign --yes "$REF"
+          REF_FPM: ${{ steps.publish.outputs.ref_fpm }}
+        run: cosign sign --yes "$REF" "$REF_FPM"

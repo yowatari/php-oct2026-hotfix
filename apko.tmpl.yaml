@@ -1,4 +1,4 @@
-# Rendered by scripts/render.sh -> build/apko.yaml.
+# Rendered by scripts/render.sh -> build/<version>/apko.yaml (CLI) and apko-fpm.yaml.
 contents:
   repositories:
     - https://packages.wolfi.dev/os
@@ -10,6 +10,7 @@ contents:
     - wolfi-baselayout
     - ca-certificates-bundle
     - php-hotfix=@@VERSION@@-r@@EPOCH@@@local
+# @@FPM_PACKAGE@@
 
 accounts:
   groups:
@@ -22,10 +23,10 @@ accounts:
   run-as: 65532
 
 entrypoint:
-  command: /usr/bin/php
+  command: @@ENTRYPOINT@@
 
 annotations:
-  org.opencontainers.image.title: php-hotfix
+  org.opencontainers.image.title: php-hotfix@@FLAVOR_SUFFIX@@
   org.opencontainers.image.version: "@@VERSION@@"
   org.opencontainers.image.description: "PHP @@VERSION@@-r@@EPOCH@@ (fixes CVE-2026-109618, CVE-2026-109619)"
   org.opencontainers.image.source: https://github.com/yowatari/php-oct2026-hotfix

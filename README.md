@@ -10,17 +10,20 @@ Zero-Lag Emergency Patch Builder
 
 ## 対応バージョン
 
-| ブランチ | ソース | イメージタグ |
+| ブランチ | ソース | イメージタグ（CLI / FPM） |
 |---|---|---|
-| 8.5 / 8.4 / 8.3 / 8.2 | php.net の修正済み tarball（8.5.12 / 8.4.27 / 8.3.36 / 8.2.35） | `8.5.12`, `8.5.12-r0`, `8.5` など |
-| 8.1 / 8.0 / 7.4（EOL） | 最終 tarball（8.1.34 / 8.0.30 / 7.4.33）＋ PHP セキュリティチームの公式バックポート（`patches/<branch>/`） | `7.4.33-r1`, `7.4` など |
+| 8.5 / 8.4 / 8.3 / 8.2 | php.net の修正済み tarball（8.5.12 / 8.4.27 / 8.3.36 / 8.2.35） | `8.5.12`, `8.5.12-r0`, `8.5` / `8.5.12-fpm`, `8.5-fpm` など |
+| 8.1 / 8.0 / 7.4（EOL） | 最終 tarball（8.1.34 / 8.0.30 / 7.4.33）＋ PHP セキュリティチームの公式バックポート（`patches/<branch>/`） | `7.4.33-r1`, `7.4` / `7.4.33-r1-fpm`, `7.4-fpm` など |
 
 EOL ブランチ用のパッチは、php-src の `PHP-{7.4,8.0,8.1}-CVE-2026-109618-109619` ブランチにある修正コミット "Avoid state corruption via bailout" を `git format-patch` で取り出したものです。パッチを当てたビルドはリビジョン `-r1` になります。素の tarball ビルドと同じタグを名乗らないように、`7.4.33` のような素のバージョンタグは付けません。
 
 ```sh
 docker run --rm ghcr.io/yowatari/php-oct2026-hotfix:8.5 -v
 docker run --rm ghcr.io/yowatari/php-oct2026-hotfix:7.4.33-r1 -v
+docker run -d -p 9000:9000 ghcr.io/yowatari/php-oct2026-hotfix:8.5-fpm   # php-fpm -F, listen 9000
 ```
+
+ghcr.io のパッケージは作成時に private になります。認証なしで pull させたい場合は、GitHub の Packages 設定で Public に変更してください。
 
 ## 仕組み
 
@@ -29,8 +32,14 @@ scripts/render.sh <version>
   ├─ php.net/releases の JSON から tarball の sha256 を取得
   ├─ patches/<major.minor>/*.patch を build/<version>/src/patches にコピー
   └─ melange.tmpl.yaml / apko.tmpl.yaml から build/<version>/ を生成
-melange build   公式 tarball 取得（sha256 で検証）→ パッチ適用 → ビルド → テスト → 署名付き apk
-apko publish    Wolfi ベースの distroless イメージ（nonroot, uid 65532）＋ SBOM を ghcr.io に push
+melange build   Wolfi 上で公式 tarball を取得（sha256 で検証）→ パッチ適用 → ビルド
+                → 署名付き apk 3 つに分割し、それぞれの test: を実行
+                    php-hotfix      php CLI, php.ini, 拡張
+                    php-hotfix-fpm  php-fpm と設定（listen 9000, stderr ログ）
+                    php-hotfix-dev  phpize, php-config, ヘッダ（拡張モジュールのビルド用）
+apko publish    Wolfi ベースの distroless イメージ 2 種（nonroot, uid 65532, シェルなし）＋ SBOM を push
+                    apko.yaml      php-hotfix                  → :<tag>
+                    apko-fpm.yaml  php-hotfix + php-hotfix-fpm → :<tag>-fpm
 cosign sign     GitHub OIDC によるキーレス署名
 ```
 
@@ -51,7 +60,7 @@ docker run --privileged --rm -v "$PWD":/work -w /work cgr.dev/chainguard/melange
   build build/8.5.12/melange.yaml --arch x86_64 --signing-key melange.rsa \
   --source-dir build/8.5.12/src --out-dir build/8.5.12/packages
 docker run --rm -v "$PWD":/work -w /work cgr.dev/chainguard/apko \
-  build build/8.5.12/apko.yaml php-hotfix:8.5.12 build/8.5.12/image.tar
+  build build/8.5.12/apko.yaml php-hotfix:8.5.12 build/8.5.12/image.tar   # FPM は apko-fpm.yaml
 docker load < build/8.5.12/image.tar
 ```
 
