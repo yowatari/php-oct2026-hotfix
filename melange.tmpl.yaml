@@ -1,0 +1,111 @@
+# Rendered by scripts/render.sh -> build/melange.yaml. Do not edit build/ by hand.
+package:
+  name: php-hotfix
+  version: "@@VERSION@@"
+  epoch: @@EPOCH@@
+  description: "PHP @@VERSION@@ from php.net + patches/@@BRANCH@@ (CVE-2026-109618 / CVE-2026-109619)"
+  copyright:
+    - license: PHP-3.01
+  dependencies:
+    runtime:
+      - ca-certificates-bundle
+      - tzdata
+
+environment:
+  contents:
+    repositories:
+      - https://packages.wolfi.dev/os
+    keyring:
+      - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+    packages:
+      - autoconf
+      - bison
+      - build-base
+      - busybox
+      - ca-certificates-bundle
+      - curl-dev
+      - libxml2-dev
+      - oniguruma-dev
+      - openssl-dev
+      - patch
+      - re2c
+      - sqlite-dev
+      - zlib-dev
+
+pipeline:
+  # Official tarball, pinned to the sha256 published at php.net/releases JSON.
+  - uses: fetch
+    with:
+      uri: https://www.php.net/distributions/php-${{package.version}}.tar.xz
+      expected-sha256: "@@SHA256@@"
+
+  # patches/<major.minor>/*.patch, staged by render.sh. Used for EOL branches
+  # (official backports) or to ship a fix before a tarball exists.
+  - name: Apply patches
+    runs: |
+      for p in ./patches/*.patch; do
+        [ -e "$p" ] || continue
+        echo "applying $p"
+        patch -p1 --no-backup-if-mismatch < "$p"
+      done
+
+# @@LEGACY_DEPS@@
+
+  - name: Configure
+    runs: |
+      export CFLAGS="${CFLAGS:-} @@CFLAGS_EXTRA@@"
+      # Prefer legacy deps when the block above built them.
+      if [ -d /opt/legacy ]; then
+        export PKG_CONFIG_PATH=/opt/legacy/lib/pkgconfig
+        export CPPFLAGS="-I/opt/legacy/include ${CPPFLAGS:-}"
+        export LDFLAGS="-L/opt/legacy/lib ${LDFLAGS:-}"
+      fi
+      ./configure \
+        --host=${{host.triplet.gnu}} \
+        --build=${{host.triplet.gnu}} \
+        --prefix=/usr \
+        --sysconfdir=/etc/php \
+        --localstatedir=/var \
+        --sbindir=/usr/bin \
+        --with-config-file-path=/etc/php \
+        --with-config-file-scan-dir=/etc/php/conf.d \
+        --disable-cgi \
+        --disable-phpdbg \
+        --enable-fpm \
+        --enable-bcmath \
+        --enable-mbstring \
+        --enable-pcntl \
+        --enable-sockets \
+        --with-curl \
+        --with-openssl \
+        --with-zlib \
+        --with-mysqli=mysqlnd \
+        --with-pdo-mysql=mysqlnd \
+        --with-pdo-sqlite \
+        --without-pear
+
+  - uses: autoconf/make
+
+  - name: Install
+    runs: |
+      make INSTALL_ROOT="${{targets.destdir}}" install
+      mkdir -p "${{targets.destdir}}/etc/php/conf.d"
+      install -m644 php.ini-production "${{targets.destdir}}/etc/php/php.ini"
+      # fpm runs as nonroot: log to stderr, listen on all interfaces
+      sed -e 's|^;error_log = .*|error_log = /proc/self/fd/2|' \
+          "${{targets.destdir}}/etc/php/php-fpm.conf.default" > "${{targets.destdir}}/etc/php/php-fpm.conf"
+      sed -e 's|^listen = .*|listen = 9000|' \
+          -e 's|^user = .*|;user = nobody|' -e 's|^group = .*|;group = nobody|' \
+          -e 's|^;catch_workers_output = .*|catch_workers_output = yes|' \
+          "${{targets.destdir}}/etc/php/php-fpm.d/www.conf.default" > "${{targets.destdir}}/etc/php/php-fpm.d/www.conf"
+      rm -rf "${{targets.destdir}}/usr/php" "${{targets.destdir}}/usr/share/man"
+
+  - uses: strip
+
+test:
+  pipeline:
+    - runs: |
+        php -v
+        php -v | grep -q "PHP @@VERSION@@ "
+        php -m | grep -qi openssl
+        php-fpm -t -y /etc/php/php-fpm.conf
