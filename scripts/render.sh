@@ -51,7 +51,7 @@ render "$root/melange.tmpl.yaml" > "$out/melange.yaml"
 render -e "/^# @@FPM_PACKAGE@@$/d" \
   -e "s|@@ENTRYPOINT@@|/usr/bin/php|" -e "s/@@FLAVOR_SUFFIX@@//" \
   "$root/apko.tmpl.yaml" > "$out/apko.yaml"
-render -e "s|^# @@FPM_PACKAGE@@$|    - php-hotfix-fpm=${version}-r${epoch}@local|" \
+render -e "s|^# @@FPM_PACKAGE@@$|    - php-hotfix-fpm=${version}-r${epoch}|" \
   -e "s|@@ENTRYPOINT@@|/usr/bin/php-fpm -F -y /etc/php/php-fpm.conf|" -e "s/@@FLAVOR_SUFFIX@@/-fpm/" \
   "$root/apko.tmpl.yaml" > "$out/apko-fpm.yaml"
 if [ "$legacy" = 1 ]; then

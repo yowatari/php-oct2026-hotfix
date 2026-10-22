@@ -1,15 +1,15 @@
 # Rendered by scripts/render.sh -> build/<version>/apko.yaml (CLI) and apko-fpm.yaml.
 contents:
+  # The locally built apk repository and melange.rsa.pub are appended at build
+  # time (apko -r/-k, or the apko-publish action's repository/keyring-append).
   repositories:
     - https://packages.wolfi.dev/os
-    - "@local /work/build/@@VERSION@@/packages"
   keyring:
     - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
-    - /work/melange.rsa.pub
   packages:
     - wolfi-baselayout
     - ca-certificates-bundle
-    - php-hotfix=@@VERSION@@-r@@EPOCH@@@local
+    - php-hotfix=@@VERSION@@-r@@EPOCH@@
 # @@FPM_PACKAGE@@
 
 accounts:

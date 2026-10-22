@@ -21,8 +21,6 @@ permissions:
 env:
   # Supported branches: fixed tarballs. EOL branches: last tarball + patches/<branch>/.
   DEFAULT_VERSIONS: '["8.5.12","8.4.27","8.3.36","8.2.35","8.1.34","8.0.30","7.4.33"]'
-  MELANGE_IMAGE: cgr.dev/chainguard/melange:latest
-  APKO_IMAGE: cgr.dev/chainguard/apko:latest
 
 jobs:
   matrix:
@@ -47,6 +45,8 @@ jobs:
       fail-fast: false
       matrix:
         version: ${{ fromJSON(needs.matrix.outputs.versions) }}
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
 
@@ -54,48 +54,71 @@ jobs:
         id: render
         run: scripts/render.sh "${{ matrix.version }}"
 
-      - name: melange keygen
-        run: docker run --rm -v "$PWD":/work -w /work "$MELANGE_IMAGE" keygen melange.rsa
-
+      # Installs melange + bubblewrap on the runner, generates a throwaway
+      # signing key, then fetches, patches, builds and tests the apks.
       - name: melange build (fetch, patch, compile, test)
-        run: |
-          docker run --privileged --rm -v "$PWD":/work -w /work "$MELANGE_IMAGE" \
-            build "${{ steps.render.outputs.dir }}/melange.yaml" \
-            --arch x86_64 \
-            --signing-key melange.rsa \
-            --source-dir "${{ steps.render.outputs.dir }}/src" \
-            --out-dir "${{ steps.render.outputs.dir }}/packages"
-
-      - uses: docker/login-action@v3
+        uses: chainguard-dev/actions/melange-build@53668650c25af6e8864f1d1ddaa69ed4db4cdf09 # v1.6.42
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          version: v0.63.0
+          config: ${{ steps.render.outputs.dir }}/melange.yaml
+          source-dir: ${{ steps.render.outputs.dir }}/src
+          repository-path: ${{ github.workspace }}/${{ steps.render.outputs.dir }}/packages
+          archs: x86_64
+          sign-with-temporary-key: true
+          signing-key-path: ${{ github.workspace }}/melange.rsa
 
-      - name: apko publish (image + SBOM)
-        id: publish
+      - name: Image tags
+        id: tags
         env:
           VERSION: ${{ steps.render.outputs.version }}
           BRANCH: ${{ steps.render.outputs.branch }}
           EPOCH: ${{ steps.render.outputs.epoch }}
-          DIR: ${{ steps.render.outputs.dir }}
         run: |
-          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          image="${IMAGE,,}"
+          for flavor in "" -fpm; do
+            tags="$image:$VERSION-r$EPOCH$flavor $image:$BRANCH$flavor"
+            # A pristine tarball build may also own the bare version tag.
+            if [ "$EPOCH" = 0 ]; then tags="$tags $image:$VERSION$flavor"; fi
+            echo "tags${flavor//-/_}=$tags" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: apko publish (php CLI image + SBOM)
+        uses: chainguard-images/actions/apko-publish@8e701b320e7efcb120a1115de26e9fe833f86390 # v1.0.38
+        with:
+          config: ${{ steps.render.outputs.dir }}/apko.yaml
+          tag: ${{ steps.tags.outputs.tags }}
+          repository-append: ${{ github.workspace }}/${{ steps.render.outputs.dir }}/packages
+          keyring-append: ${{ github.workspace }}/melange.rsa.pub
+          archs: x86_64
+
+      - name: apko publish (php-fpm image + SBOM)
+        uses: chainguard-images/actions/apko-publish@8e701b320e7efcb120a1115de26e9fe833f86390 # v1.0.38
+        with:
+          config: ${{ steps.render.outputs.dir }}/apko-fpm.yaml
+          tag: ${{ steps.tags.outputs.tags_fpm }}
+          repository-append: ${{ github.workspace }}/${{ steps.render.outputs.dir }}/packages
+          keyring-append: ${{ github.workspace }}/melange.rsa.pub
+          archs: x86_64
+
+      - name: Resolve digests
+        id: publish
+        env:
+          TAGS: ${{ steps.tags.outputs.tags }}
+          TAGS_FPM: ${{ steps.tags.outputs.tags_fpm }}
+          VERSION: ${{ steps.render.outputs.version }}
+          EPOCH: ${{ steps.render.outputs.epoch }}
+        run: |
           {
             echo "### PHP $VERSION-r$EPOCH"
             echo
             echo "- patches applied: ${{ steps.render.outputs.patches }}"
           } >> "$GITHUB_STEP_SUMMARY"
-          # "" = php CLI image, "-fpm" = php-fpm image
           for flavor in "" -fpm; do
-            tags=("$image:$VERSION-r$EPOCH$flavor" "$image:$BRANCH$flavor")
-            # A pristine tarball build may also own the bare version tag.
-            [ "$EPOCH" = 0 ] && tags+=("$image:$VERSION$flavor")
-            docker run --rm -v "$PWD":/work -w /work -v "$HOME/.docker":/root/.docker:ro "$APKO_IMAGE" \
-              publish "$DIR/apko$flavor.yaml" "${tags[@]}" --image-refs "$DIR/image-refs$flavor.txt"
+            var="TAGS${flavor//-/_}"; var="${var^^}"
+            read -ra tags <<< "${!var}"
             # Pin to the digest the tags resolve to (the OCI index), not a per-arch manifest.
             digest="$(docker buildx imagetools inspect "${tags[0]}" --format '{{json .Manifest}}' | jq -r .digest)"
-            ref="$image@$digest"
+            ref="${IMAGE,,}@$digest"
             echo "ref${flavor//-/_}=$ref" >> "$GITHUB_OUTPUT"
             {
               echo "- digest${flavor}: \`$ref\`"
@@ -119,6 +142,13 @@ jobs:
           test "$(docker inspect -f '{{.State.Running}}' fpm)" = true
           docker rm -f fpm
 
+      # apko-publish authenticates on its own; cosign needs a docker login.
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: sigstore/cosign-installer@v3
 
       - name: cosign sign (keyless)
@@ -130,7 +160,6 @@ jobs:
 
       - name: cosign verify (by tag, as users will)
         env:
-          IMAGE: ghcr.io/${{ github.repository }}
           BRANCH: ${{ steps.render.outputs.branch }}
         run: |
           for tag in "${IMAGE,,}:$BRANCH" "${IMAGE,,}:$BRANCH-fpm"; do
@@ -139,3 +168,11 @@ jobs:
               --certificate-oidc-issuer https://token.actions.githubusercontent.com > /dev/null
             echo "verified $tag"
           done
+
+      # Trivy + Grype scan; results are attached to the image as signed
+      # cosign vuln attestations. Informational: does not fail the build.
+      - name: Vulnerability scan + attestation
+        uses: chainguard-images/actions/vul-scans@8e701b320e7efcb120a1115de26e9fe833f86390 # v1.0.38
+        with:
+          image: ${{ steps.publish.outputs.ref }}
+          RUN_SNYK: "false"

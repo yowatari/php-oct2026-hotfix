@@ -47,6 +47,7 @@ apko publish    Wolfi ベースの distroless イメージ 2 種（nonroot, uid 
                     apko.yaml      php-hotfix                  → :<tag>
                     apko-fpm.yaml  php-hotfix + php-hotfix-fpm → :<tag>-fpm
 cosign sign     GitHub OIDC によるキーレス署名
+vul-scans       Trivy / Grype でスキャンし、結果を cosign の vuln attestation としてイメージに添付
 ```
 
 - `.github/workflows/build.yml` は全バージョンを matrix で並列にビルドします。`workflow_dispatch` の `versions` に `["7.4.33"]` のような JSON を渡すと、指定したバージョンだけをビルドします。
@@ -59,6 +60,8 @@ cosign sign     GitHub OIDC によるキーレス署名
 
 ## ローカルでのビルド
 
+CI では [chainguard-dev/actions](https://github.com/chainguard-dev/actions) の `melange-build` と、[chainguard-images/actions](https://github.com/chainguard-images/actions) の `apko-publish` / `vul-scans` を使っています。手元では同じことをコンテナで実行できます。
+
 ```sh
 scripts/render.sh 8.5.12
 docker run --rm -v "$PWD":/work -w /work cgr.dev/chainguard/melange keygen melange.rsa
@@ -66,7 +69,8 @@ docker run --privileged --rm -v "$PWD":/work -w /work cgr.dev/chainguard/melange
   build build/8.5.12/melange.yaml --arch x86_64 --signing-key melange.rsa \
   --source-dir build/8.5.12/src --out-dir build/8.5.12/packages
 docker run --rm -v "$PWD":/work -w /work cgr.dev/chainguard/apko \
-  build build/8.5.12/apko.yaml php-hotfix:8.5.12 build/8.5.12/image.tar   # FPM は apko-fpm.yaml
+  build build/8.5.12/apko.yaml php-hotfix:8.5.12 build/8.5.12/image.tar \
+  -r /work/build/8.5.12/packages -k /work/melange.rsa.pub   # FPM は apko-fpm.yaml
 docker load < build/8.5.12/image.tar
 ```
 
