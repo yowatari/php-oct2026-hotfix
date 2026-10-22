@@ -1,0 +1,37 @@
+  # --- legacy deps (PHP 7.4 / 8.0 / 8.1 only; spliced in by scripts/render.sh) ---
+  # These branches do not build against current OpenSSL 3.x or libxml2 >= 2.12.
+  # OpenSSL 1.1.1 is shared so its versioned symbols (OPENSSL_1_1_0) can coexist
+  # with libcurl's OpenSSL 3; libxml2 is linked statically into php.
+  - uses: fetch
+    with:
+      uri: https://www.openssl.org/source/openssl-1.1.1w.tar.gz
+      expected-sha256: cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8
+      extract: false
+  - uses: fetch
+    with:
+      uri: https://download.gnome.org/sources/libxml2/2.11/libxml2-2.11.9.tar.xz
+      expected-sha256: 780157a1efdb57188ec474dca87acaee67a3a839c2525b2214d318228451809f
+      extract: false
+  - name: Build legacy OpenSSL 1.1.1w and libxml2 2.11.9
+    runs: |
+      mkdir -p /tmp/legacy-src
+      tar xzf openssl-1.1.1w.tar.gz -C /tmp/legacy-src
+      tar xJf libxml2-2.11.9.tar.xz -C /tmp/legacy-src
+      rm -f openssl-1.1.1w.tar.gz libxml2-2.11.9.tar.xz
+      (
+        cd /tmp/legacy-src/openssl-1.1.1w
+        ./config --prefix=/opt/legacy --libdir=lib --openssldir=/etc/ssl shared no-tests
+        make -j$(nproc)
+        make install_sw
+      )
+      (
+        cd /tmp/legacy-src/libxml2-2.11.9
+        ./configure --prefix=/opt/legacy --disable-shared --enable-static --with-pic \
+          --without-python --without-lzma --without-icu
+        make -j$(nproc)
+        make install
+      )
+      mkdir -p "${{targets.destdir}}/usr/lib"
+      cp -a /opt/legacy/lib/libssl.so.1.1 /opt/legacy/lib/libcrypto.so.1.1 "${{targets.destdir}}/usr/lib/"
+      rm -f /opt/legacy/lib/libxml2.la
+  # --- end legacy deps ---

@@ -1,0 +1,329 @@
+name: build
+
+# PRs build and test only. main, the daily schedule and manual runs publish.
+# Each version is skipped when its inputs (melange + apko config, patches)
+# were already published, and apks are cached per arch, so a typical run only
+# rebuilds what changed.
+on:
+  push:
+    branches: [main]
+    paths:
+      - melange.tmpl.yaml
+      - apko.tmpl.yaml
+      - legacy-deps.inc.yaml
+      - patches/**
+      - scripts/**
+      - .github/workflows/build.yml
+  pull_request:
+    paths:
+      - melange.tmpl.yaml
+      - apko.tmpl.yaml
+      - legacy-deps.inc.yaml
+      - patches/**
+      - scripts/**
+      - .github/workflows/build.yml
+  schedule:
+    # Re-run apko daily so images pick up Wolfi base fixes (PHP is not rebuilt).
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: 'JSON list of PHP versions, e.g. ["8.5.12","7.4.33"]'
+        required: false
+        default: ""
+      force:
+        description: Republish images even if their inputs are unchanged
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Supported branches: fixed tarballs. EOL branches: last tarball + patches/<branch>/.
+  DEFAULT_VERSIONS: '["8.5.12","8.4.27","8.3.36","8.2.35","8.1.34","8.0.30","7.4.33"]'
+  IMAGE: ghcr.io/${{ github.repository }}
+  PUBLISH: ${{ github.event_name != 'pull_request' }}
+  # The schedule exists to refresh base packages, so it always republishes.
+  FORCE: ${{ inputs.force || github.event_name == 'schedule' }}
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.v.outputs.versions }}
+    steps:
+      - id: v
+        env:
+          INPUT: ${{ inputs.versions }}
+        run: echo "versions=${INPUT:-$DEFAULT_VERSIONS}" >> "$GITHUB_OUTPUT"
+
+  # One native build per arch; no emulation in the compile path.
+  packages:
+    needs: matrix
+    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJSON(needs.matrix.outputs.versions) }}
+        arch: [x86_64, aarch64]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Render melange/apko config
+        id: render
+        run: scripts/render.sh "${{ matrix.version }}"
+
+      - name: Already published?
+        id: skip
+        env:
+          HASH: ${{ steps.render.outputs.image_hash }}
+        run: |
+          skip=false
+          if [ "$PUBLISH" = true ] && [ "$FORCE" != true ] &&
+            docker buildx imagetools inspect "${IMAGE,,}:build-$HASH" > /dev/null 2>&1; then
+            skip=true
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
+      - name: Restore apks
+        if: steps.skip.outputs.skip != 'true'
+        id: cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            ${{ steps.render.outputs.dir }}/packages/${{ matrix.arch }}
+            keys/${{ matrix.arch }}.rsa.pub
+          key: apk-${{ matrix.version }}-${{ matrix.arch }}-${{ steps.render.outputs.melange_hash }}
+
+      - name: Prepare key dir
+        if: steps.skip.outputs.skip != 'true' && steps.cache.outputs.cache-hit != 'true'
+        run: mkdir -p keys
+
+      # Installs melange + bubblewrap on the runner, generates a throwaway
+      # signing key, then fetches, patches, builds and tests the apks.
+      - name: melange build (fetch, patch, compile, test)
+        if: steps.skip.outputs.skip != 'true' && steps.cache.outputs.cache-hit != 'true'
+        uses: chainguard-dev/actions/melange-build@53668650c25af6e8864f1d1ddaa69ed4db4cdf09 # v1.6.42
+        with:
+          version: v0.63.0
+          config: ${{ steps.render.outputs.dir }}/melange.yaml
+          source-dir: ${{ github.workspace }}/${{ steps.render.outputs.dir }}/src
+          repository-path: ${{ github.workspace }}/${{ steps.render.outputs.dir }}/packages
+          archs: ${{ matrix.arch }}
+          sign-with-temporary-key: true
+          signing-key-path: ${{ github.workspace }}/keys/${{ matrix.arch }}.rsa
+
+      - name: Drop the private key
+        if: steps.skip.outputs.skip != 'true' && steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo rm -f "keys/${{ matrix.arch }}.rsa"
+          sudo chown -R "$(id -u):$(id -g)" keys
+
+      - name: Upload apks
+        if: steps.skip.outputs.skip != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: apk-${{ matrix.version }}-${{ matrix.arch }}
+          path: |
+            ${{ steps.render.outputs.dir }}/packages/${{ matrix.arch }}
+            keys/${{ matrix.arch }}.rsa.pub
+          retention-days: 1
+          if-no-files-found: error
+
+  # Assemble one multi-arch image per flavour from both arches' apks.
+  image:
+    needs: [matrix, packages]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # keyless cosign signing
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJSON(needs.matrix.outputs.versions) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Render melange/apko config
+        id: render
+        run: scripts/render.sh "${{ matrix.version }}"
+
+      - name: Already published?
+        id: skip
+        env:
+          HASH: ${{ steps.render.outputs.image_hash }}
+        run: |
+          skip=false
+          if [ "$PUBLISH" = true ] && [ "$FORCE" != true ] &&
+            docker buildx imagetools inspect "${IMAGE,,}:build-$HASH" > /dev/null 2>&1; then
+            skip=true
+            echo "### PHP ${{ matrix.version }}: unchanged (build-$HASH already published), skipped" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
+      - name: Download apks
+        if: steps.skip.outputs.skip != 'true'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: apk-${{ matrix.version }}-*
+          merge-multiple: true
+
+      - name: Trust the per-arch melange keys in apko configs
+        if: steps.skip.outputs.skip != 'true'
+        env:
+          DIR: ${{ steps.render.outputs.dir }}
+        run: |
+          ls -R "$DIR/packages" keys
+          for f in "$DIR/apko.yaml" "$DIR/apko-fpm.yaml"; do
+            for k in keys/*.rsa.pub; do
+              sed -i "\|wolfi-signing.rsa.pub|a\    - $GITHUB_WORKSPACE/$k" "$f"
+            done
+          done
+          grep -A3 '^  keyring:' "$DIR/apko.yaml"
+
+      - uses: docker/setup-qemu-action@v4
+        if: steps.skip.outputs.skip != 'true'
+
+      # ---- pull requests: build locally and test both arches, no push ----
+      - name: apko build + smoke test (no publish)
+        if: steps.skip.outputs.skip != 'true' && env.PUBLISH != 'true'
+        env:
+          DIR: ${{ steps.render.outputs.dir }}
+          VERSION: ${{ steps.render.outputs.version }}
+        run: |
+          for flavor in cli fpm; do
+            cfg="$DIR/apko.yaml"; [ "$flavor" = fpm ] && cfg="$DIR/apko-fpm.yaml"
+            docker run --rm -v "$PWD":"$PWD" -w "$PWD" cgr.dev/chainguard/apko:latest \
+              build "$cfg" "php-hotfix:$flavor" "$DIR/image-$flavor.tar" \
+              -r "$PWD/$DIR/packages"
+            docker load < "$DIR/image-$flavor.tar"
+          done
+          scripts/smoke.sh php-hotfix:cli-amd64 php-hotfix:fpm-amd64 "$VERSION" linux/amd64
+          scripts/smoke.sh php-hotfix:cli-arm64 php-hotfix:fpm-arm64 "$VERSION" linux/arm64
+
+      # ---- main / schedule / dispatch: publish, test, sign ----
+      - name: Image tags
+        if: steps.skip.outputs.skip != 'true' && env.PUBLISH == 'true'
+        id: tags
+        env:
+          VERSION: ${{ steps.render.outputs.version }}
+          BRANCH: ${{ steps.render.outputs.branch }}
+          EPOCH: ${{ steps.render.outputs.epoch }}
+        run: |
+          image="${IMAGE,,}"
+          for flavor in "" -fpm; do
+            tags="$image:$VERSION-r$EPOCH$flavor $image:$BRANCH$flavor"
+            # A pristine tarball build may also own the bare version tag.
+            if [ "$EPOCH" = 0 ]; then tags="$tags $image:$VERSION$flavor"; fi
+            echo "tags${flavor//-/_}=$tags" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: apko publish (php CLI image + SBOM)
+        if: steps.skip.outputs.skip != 'true' && env.PUBLISH == 'true'
+        uses: chainguard-images/actions/apko-publish@8e701b320e7efcb120a1115de26e9fe833f86390 # v1.0.38
+        with:
+          config: ${{ steps.render.outputs.dir }}/apko.yaml
+          tag: ${{ steps.tags.outputs.tags }}
+          repository-append: ${{ github.workspace }}/${{ steps.render.outputs.dir }}/packages
+
+      - name: apko publish (php-fpm image + SBOM)
+        if: steps.skip.outputs.skip != 'true' && env.PUBLISH == 'true'
+        uses: chainguard-images/actions/apko-publish@8e701b320e7efcb120a1115de26e9fe833f86390 # v1.0.38
+        with:
+          config: ${{ steps.render.outputs.dir }}/apko-fpm.yaml
+          tag: ${{ steps.tags.outputs.tags_fpm }}
+          repository-append: ${{ github.workspace }}/${{ steps.render.outputs.dir }}/packages
+
+      - name: Resolve digests
+        if: steps.skip.outputs.skip != 'true' && env.PUBLISH == 'true'
+        id: publish
+        env:
+          TAGS: ${{ steps.tags.outputs.tags }}
+          TAGS_FPM: ${{ steps.tags.outputs.tags_fpm }}
+          VERSION: ${{ steps.render.outputs.version }}
+          EPOCH: ${{ steps.render.outputs.epoch }}
+        run: |
+          {
+            echo "### PHP $VERSION-r$EPOCH (linux/amd64, linux/arm64)"
+            echo
+            echo "- patches applied: ${{ steps.render.outputs.patches }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for flavor in "" -fpm; do
+            var="TAGS${flavor//-/_}"; var="${var^^}"
+            read -ra tags <<< "${!var}"
+            # Pin to the digest the tags resolve to (the OCI index), not a per-arch manifest.
+            digest="$(docker buildx imagetools inspect "${tags[0]}" --format '{{json .Manifest}}' | jq -r .digest)"
+            ref="${IMAGE,,}@$digest"
+            echo "ref${flavor//-/_}=$ref" >> "$GITHUB_OUTPUT"
+            {
+              echo "- digest${flavor}: \`$ref\`"
+              printf -- '  - tag: `%s`\n' "${tags[@]}"
+            } >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Smoke test (amd64 + arm64)
+        if: steps.skip.outputs.skip != 'true' && env.PUBLISH == 'true'
+        env:
+          REF: ${{ steps.publish.outputs.ref }}
+          REF_FPM: ${{ steps.publish.outputs.ref_fpm }}
+          VERSION: ${{ steps.render.outputs.version }}
+        run: |
+          scripts/smoke.sh "$REF" "$REF_FPM" "$VERSION" linux/amd64
+          scripts/smoke.sh "$REF" "$REF_FPM" "$VERSION" linux/arm64
+
+      # apko-publish authenticates on its own; cosign needs a docker login.
+      - uses: docker/login-action@v4
+        if: steps.skip.outputs.skip != 'true' && env.PUBLISH == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        if: steps.skip.outputs.skip != 'true' && env.PUBLISH == 'true'
+
+      - name: cosign sign (keyless)
+        if: steps.skip.outputs.skip != 'true' && env.PUBLISH == 'true'
+        env:
+          REF: ${{ steps.publish.outputs.ref }}
+          REF_FPM: ${{ steps.publish.outputs.ref_fpm }}
+        # --recursive signs the index and every per-arch manifest under it
+        run: cosign sign --yes --recursive "$REF" "$REF_FPM"
+
+      - name: cosign verify (by tag, as users will)
+        if: steps.skip.outputs.skip != 'true' && env.PUBLISH == 'true'
+        env:
+          BRANCH: ${{ steps.render.outputs.branch }}
+        run: |
+          for tag in "${IMAGE,,}:$BRANCH" "${IMAGE,,}:$BRANCH-fpm"; do
+            cosign verify "$tag" \
+              --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/build.yml@" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com > /dev/null
+            echo "verified $tag"
+          done
+
+      # Marker that lets later runs skip this version. Written last, so a
+      # failed publish/sign is retried next time.
+      - name: Mark inputs as published
+        if: steps.skip.outputs.skip != 'true' && env.PUBLISH == 'true'
+        env:
+          REF: ${{ steps.publish.outputs.ref }}
+          HASH: ${{ steps.render.outputs.image_hash }}
+        run: docker buildx imagetools create --tag "${IMAGE,,}:build-$HASH" "$REF"
+
+      # Trivy + Grype scan; results are attached to the image as signed
+      # cosign vuln attestations. Informational: does not fail the build.
+      - name: Vulnerability scan + attestation
+        if: steps.skip.outputs.skip != 'true' && env.PUBLISH == 'true'
+        uses: chainguard-images/actions/vul-scans@8e701b320e7efcb120a1115de26e9fe833f86390 # v1.0.38
+        with:
+          image: ${{ steps.publish.outputs.ref }}
+          RUN_SNYK: "false"
