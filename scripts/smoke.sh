@@ -8,6 +8,21 @@ cli="$1" fpm="$2" version="$3"
 plat=()
 [ -n "${4:-}" ] && plat=(--platform "$4")
 
+# For a multi-arch index pinned by digest, run the platform's own manifest:
+# docker refuses to pull the same index digest a second time for another
+# platform ("cannot overwrite digest").
+resolve() {
+  local ref="$1" platform="$2" digest
+  if [ -z "$platform" ] || [[ "$ref" != *@sha256:* ]]; then echo "$ref"; return; fi
+  local os="${platform%%/*}" arch="${platform#*/}"
+  digest="$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest}}' |
+    jq -r --arg os "$os" --arg arch "$arch" \
+      '.manifests[]? | select(.platform.os == $os and .platform.architecture == $arch) | .digest')"
+  if [ -n "$digest" ]; then echo "${ref%@*}@$digest"; else echo "$ref"; fi
+}
+cli="$(resolve "$cli" "${4:-}")"
+fpm="$(resolve "$fpm" "${4:-}")"
+
 docker run --rm "${plat[@]}" "$cli" -v | tee /dev/stderr | grep -q "PHP $version "
 docker run --rm "${plat[@]}" "$cli" -r 'exit(file_exists("/usr/bin/php-fpm") || posix_getuid() !== 65532 ? 1 : 0);'
 docker run --rm "${plat[@]}" --entrypoint /usr/bin/php-fpm "$fpm" -t -y /etc/php/php-fpm.conf

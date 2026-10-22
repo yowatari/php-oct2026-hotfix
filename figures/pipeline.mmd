@@ -1,0 +1,27 @@
+---
+config:
+  flowchart:
+    wrappingWidth: 480
+---
+flowchart TB
+  %% 出どころ: .github/workflows/build.yml（packages ジョブ → image ジョブ）
+  src["php.net の tarball<br>sha256 を照合"]
+  pat["patches/7.4・8.0・8.1<br>公式バックポート"]
+  render["scripts/render.sh<br>設定とハッシュを生成"]
+  mx["melange x86_64<br>ubuntu-latest"]
+  ma["melange aarch64<br>ubuntu-24.04-arm"]
+  apk["署名付き apk + SBOM<br>入力ハッシュでキャッシュ"]
+  apko["apko<br>distroless・nonroot"]
+  ghcr["ghcr.io :8.5 / :8.5-fpm<br>amd64 + arm64"]
+  sign["cosign 署名と verify"]
+  scan["Trivy・Grype の結果を添付"]
+  src --> render
+  pat --> render
+  render --> mx
+  render --> ma
+  mx --> apk
+  ma --> apk
+  apk --> apko
+  apko --> ghcr
+  ghcr --> sign
+  ghcr --> scan
