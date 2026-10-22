@@ -23,7 +23,13 @@ docker run --rm ghcr.io/yowatari/php-oct2026-hotfix:7.4.33-r1 -v
 docker run -d -p 9000:9000 ghcr.io/yowatari/php-oct2026-hotfix:8.5-fpm   # php-fpm -F, listen 9000
 ```
 
-ghcr.io のパッケージは作成時に private になります。認証なしで pull させたい場合は、GitHub の Packages 設定で Public に変更してください。
+署名は GitHub Actions のキーレス署名（cosign）です。次のコマンドで確認できます。
+
+```sh
+cosign verify ghcr.io/yowatari/php-oct2026-hotfix:8.5 \
+  --certificate-identity-regexp '^https://github.com/yowatari/php-oct2026-hotfix/.github/workflows/build.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
 
 ## 仕組み
 

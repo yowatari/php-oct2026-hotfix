@@ -93,7 +93,9 @@ jobs:
             [ "$EPOCH" = 0 ] && tags+=("$image:$VERSION$flavor")
             docker run --rm -v "$PWD":/work -w /work -v "$HOME/.docker":/root/.docker:ro "$APKO_IMAGE" \
               publish "$DIR/apko$flavor.yaml" "${tags[@]}" --image-refs "$DIR/image-refs$flavor.txt"
-            ref="$(head -n1 "$DIR/image-refs$flavor.txt")" # image@sha256:...
+            # Pin to the digest the tags resolve to (the OCI index), not a per-arch manifest.
+            digest="$(docker buildx imagetools inspect "${tags[0]}" --format '{{json .Manifest}}' | jq -r .digest)"
+            ref="$image@$digest"
             echo "ref${flavor//-/_}=$ref" >> "$GITHUB_OUTPUT"
             {
               echo "- digest${flavor}: \`$ref\`"
@@ -123,4 +125,17 @@ jobs:
         env:
           REF: ${{ steps.publish.outputs.ref }}
           REF_FPM: ${{ steps.publish.outputs.ref_fpm }}
-        run: cosign sign --yes "$REF" "$REF_FPM"
+        # --recursive signs the index and every per-arch manifest under it
+        run: cosign sign --yes --recursive "$REF" "$REF_FPM"
+
+      - name: cosign verify (by tag, as users will)
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+          BRANCH: ${{ steps.render.outputs.branch }}
+        run: |
+          for tag in "${IMAGE,,}:$BRANCH" "${IMAGE,,}:$BRANCH-fpm"; do
+            cosign verify "$tag" \
+              --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/build.yml@" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com > /dev/null
+            echo "verified $tag"
+          done
