@@ -66,6 +66,13 @@
         "melange_hash=818466636be3ec99",
         "image_hash=942314a2456dd338"
       ]
+    },
+    {
+      "name": "copy-app",
+      "cmd": "docker build -q -t php-hotfix-copy-app examples/copy-app >/dev/null && docker run --rm php-hotfix-copy-app",
+      "expect": [
+        "hello from 8.5.12"
+      ]
     }
   ]
 }

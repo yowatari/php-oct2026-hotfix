@@ -8,7 +8,7 @@
 
 <details><summary>この資料の構成</summary>
 
-この資料は、公式イメージやディストリビューションの更新を待たなくても、検証できる形の修正版を当日中に自分たちで出せた（そして次も同じ手順で出せる）ことを伝えます。
+この資料は、公式イメージやディストリビューションの更新を待たなくても、検証できる形の修正版を当日中に自分たちで出せた（その手順はこのリポジトリに残してある）ことを伝えます。
 
 | 節 | 役割 | 見せるもの |
 |---|---|---|
@@ -74,7 +74,7 @@ Fix GHSA-w8hw-w9fx-j79w (CVE-2026-109618)
 Fix GHSA-6wmf-4rv5-p3rp (CVE-2026-109619)
 ```
 
-`scripts/render.sh` は、php.net から tarball の sha256 を取り、パッチの有無を見て設定を作ります。パッチを当てたビルドはパッケージのリビジョンが `-r1`（`epoch=1`）になり、素の 7.4.33（`-r0`）と区別できます。
+`scripts/render.sh` は、php.net から tarball の sha256 を取り、パッチの有無を見て設定を作ります。パッチを当てたビルドは、melange の `epoch` を 1 にします。`epoch` はパッケージのリビジョン番号で、`7.4.33-r1` の `r1` がそれです。素の 7.4.33（`-r0`）と区別できます。
 
 <!-- output: render-74 -->
 ```
@@ -108,7 +108,7 @@ legacy=1
 | apk | melange が署名し、apko は署名を検証できた apk だけを入れる |
 | イメージ | apko がパッケージごとの SBOM（SPDX 形式）をイメージ内の `/var/lib/db/sbom/` に入れる |
 | 配布 | cosign で署名する。鍵は持たず、GitHub Actions が発行する ID（OIDC トークン）で一時的な証明書を取る「キーレス署名」 |
-| スキャン | 脆弱性スキャナ Trivy と Grype の結果を、署名付きの添付情報（attestation）としてイメージに付ける |
+| スキャン | Chainguard の vul-scans Action が、脆弱性スキャナ Trivy と Grype の結果を、署名付きの添付情報（attestation）としてイメージに付ける |
 
 **SBOM には、PHP のソースだけでなく、同梱した OpenSSL と libxml2 の取得元まで記録されています。** 7.4 のイメージで、php-hotfix の SBOM に書かれた取得元を表示すると次のとおりです。
 
@@ -148,7 +148,21 @@ Platform:  linux/arm64
 
 arm64 は、CI の `ubuntu-24.04-arm` ランナーで、エミュレーションを使わずにネイティブでビルドしています。
 
-シェルがないので、Dockerfile でこのイメージを `FROM` にしたときは `RUN` が使えません。アプリは `COPY` で載せます。拡張モジュールを足すなら、`melange.tmpl.yaml` の configure を変えるか、別の melange パッケージにして apko の `packages` に加えます（この手順はまだ試していない）。
+シェルがないので、Dockerfile でこのイメージを `FROM` にしたときは `RUN` が使えません。アプリは `COPY` で載せます。
+
+<!-- source: examples/copy-app/Dockerfile -->
+```dockerfile
+FROM ghcr.io/yowatari/php-oct2026-hotfix:8.5
+COPY app.php /app/app.php
+CMD ["/app/app.php"]
+```
+
+<!-- output: copy-app -->
+```
+hello from 8.5.12
+```
+
+拡張モジュールを足すなら、`melange.tmpl.yaml` の configure を変えるか、別の melange パッケージにして apko の `packages` に加えます。こちらの手順はまだ試していません（未検証）。
 
 ## 5. 運用が軽い
 
@@ -168,6 +182,8 @@ EOL の 7.4 / 8.0 / 8.1 に当てたパッチは、今回の 2 件だけを塞�
 脆弱性スキャナが「修正済み」と判定するかは、スキャナ側のデータ次第です。このイメージの PHP は独自のパッケージ名（`php-hotfix`）なので、スキャナの結果は修正の証明になりません。修正済みかは、バージョン・パッチ・SBOM で確かめてください。
 
 脆弱性そのものを突いて、塞がっていることを確かめるテストはしていません。
+
+このリポジトリはデモで、イメージは個人のアカウント（`yowatari`）の ghcr に置いています。本番の `FROM` に使うなら、リポジトリを自分たちの organization に fork して、自分たちの ghcr に出してください。ワークフローは `ghcr.io/<リポジトリ名>` に出すので、そのまま動きます。
 
 ## 次の CVE が来たら
 
@@ -232,6 +248,7 @@ EOL の 7.4 / 8.0 / 8.1 に当てたパッチは、今回の 2 件だけを塞�
 | `patches/<branch>/` | EOL ブランチ用の公式バックポート |
 | `scripts/render.sh` | バージョンから melange と apko の設定とハッシュを作る |
 | `scripts/smoke.sh` | イメージのスモークテスト |
+| `examples/copy-app/` | このイメージにアプリを `COPY` で載せる例 |
 | `.github/workflows/build.yml` | ビルド・publish・署名・スキャン |
 | `checks.json`, `figures/` | この README の出力と図を検証するためのファイル |
 
