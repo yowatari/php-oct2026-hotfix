@@ -50,7 +50,22 @@ cosign sign     GitHub OIDC によるキーレス署名
 vul-scans       Trivy / Grype でスキャンし、結果を cosign の vuln attestation としてイメージに添付
 ```
 
-- `.github/workflows/build.yml` は全バージョンを matrix で並列にビルドします。`workflow_dispatch` の `versions` に `["7.4.33"]` のような JSON を渡すと、指定したバージョンだけをビルドします。
+- イメージは `linux/amd64` と `linux/arm64` のマルチアーキテクチャです。melange は各アーキテクチャのネイティブランナー（`ubuntu-latest` と `ubuntu-24.04-arm`）でビルドし、apko が両方の apk から 1 つのイメージ（OCI index）にまとめます。
+
+## CI（`.github/workflows/build.yml`）
+
+| イベント | 動作 |
+|---|---|
+| pull request | ビルドとテストだけを行います（amd64 と、qemu での arm64）。ghcr への push はしません |
+| main への push / `workflow_dispatch` | 入力が変わったバージョンだけをビルドして publish、署名、スキャンします |
+| schedule（毎日） | apko だけを再実行して、Wolfi のベースパッケージの更新をイメージに取り込みます（PHP は再ビルドしません） |
+
+毎回すべてをビルドしないように、次の仕組みを入れています。
+
+- **バージョン単位のスキップ:** `scripts/render.sh` は、melange と apko の設定とパッチから `image_hash` を計算します。`ghcr.io/...:build-<image_hash>` タグがすでにあれば、そのバージョンは何もしません。このタグは publish・署名・verify が終わった最後に付けるので、途中で失敗した場合は次回やり直されます。
+- **apk のキャッシュ:** melange の成果物を、`melange_hash` とアーキテクチャをキーにして `actions/cache` に保存します。apko 側の設定だけを変えた場合は、PHP をコンパイルし直しません。
+- 同じブランチの古い実行は、`concurrency` で自動的にキャンセルします。
+- `workflow_dispatch` の `versions` に `["7.4.33"]` のような JSON を渡すと、そのバージョンだけを対象にします。`force` を有効にすると、入力が変わっていなくても publish し直します。
 - 7.4 / 8.0 / 8.1 は、Wolfi が提供する OpenSSL 3.6 と libxml2 2.15 ではビルドできません。`legacy-deps.inc.yaml` で OpenSSL 1.1.1w（共有ライブラリ）と libxml2 2.11.9（静的リンク）を同じパイプライン内でビルドして使います。
 
 ## 新しい修正が出たら

@@ -60,6 +60,11 @@ else
   sed -i "/^# @@LEGACY_DEPS@@$/d" "$out/melange.yaml"
 fi
 
+# Content hashes for CI caching. melange_hash covers everything that feeds
+# the apk build; image_hash adds the apko configs on top.
+melange_hash="$(cd "$out" && find melange.yaml src -type f | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -c1-16)"
+image_hash="$(cd "$out" && { echo "$melange_hash"; cat apko.yaml apko-fpm.yaml; } | sha256sum | cut -c1-16)"
+
 {
   echo "version=$version"
   echo "branch=$branch"
@@ -68,4 +73,6 @@ fi
   echo "patches=${#patches[@]}"
   echo "legacy=$legacy"
   echo "dir=build/$version"
+  echo "melange_hash=$melange_hash"
+  echo "image_hash=$image_hash"
 } | tee -a "${GITHUB_OUTPUT:-/dev/null}"
