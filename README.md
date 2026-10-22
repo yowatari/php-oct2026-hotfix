@@ -1,29 +1,125 @@
-# php-oct2026-hotfix
+# 公式イメージを待たずに、PHP の RCE 修正版を自分たちで出せるか
 
-Zero-Lag Emergency Patch Builder
+> 想定読者：CVE が出たら公式イメージの更新を待っている、Docker と GitHub Actions を使う人。所要時間：「0. 一枚で」だけなら 1 分、全体で 10 分。
 
-2026-10-21 に公開された PHP の RCE 脆弱性 2 件に対応する PHP コンテナイメージを、公式 Docker イメージやディストリビューションのパッケージ配信を待たずに自前でビルドし、ghcr.io に配信するデモです。
+2026-10-21、PHP に認証なしで RCE できる脆弱性が 2 件公開されました。[CVE-2026-109618](https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w)（OOM 時の状態破損）と [CVE-2026-109619](https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp)（リクエスト間に残った状態）です（[PHP Foundation の記事](https://thephp.foundation/blog/2026/10/21/todays-php-security-release-and-how-were-strengthening-php-security/)）。
 
-- **CVE-2026-109618** ([GHSA-w8hw-w9fx-j79w](https://github.com/php/php-src/security/advisories/GHSA-w8hw-w9fx-j79w)): OOM 時の状態破損による RCE
-- **CVE-2026-109619** ([GHSA-6wmf-4rv5-p3rp](https://github.com/php/php-src/security/advisories/GHSA-6wmf-4rv5-p3rp)): リクエスト間に残った状態による RCE
-- 参考: [PHP Foundation blog](https://thephp.foundation/blog/2026/10/21/todays-php-security-release-and-how-were-strengthening-php-security/), [php.net announcement](https://www.php.net/archive/2026.php#2026-10-21-5)
+このリポジトリは、修正版が公開された当日に、署名と SBOM（イメージの部品表）の付いた修正版イメージを 7 バージョン分（7.4〜8.5）ghcr.io に出したデモです。
 
-## 対応バージョン
+<details><summary>この資料の構成</summary>
 
-| ブランチ | ソース | イメージタグ（CLI / FPM） |
+この資料は、公式イメージやディストリビューションの更新を待たなくても、検証できる形の修正版を当日中に自分たちで出せた（そして次も同じ手順で出せる）ことを伝えます。
+
+| 節 | 役割 | 見せるもの |
 |---|---|---|
-| 8.5 / 8.4 / 8.3 / 8.2 | php.net の修正済み tarball（8.5.12 / 8.4.27 / 8.3.36 / 8.2.35） | `8.5.12`, `8.5.12-r0`, `8.5` / `8.5.12-fpm`, `8.5-fpm` など |
-| 8.1 / 8.0 / 7.4（EOL） | 最終 tarball（8.1.34 / 8.0.30 / 7.4.33）＋ PHP セキュリティチームの公式バックポート（`patches/<branch>/`） | `7.4.33-r1`, `7.4` / `7.4.33-r1-fpm`, `7.4-fpm` など |
+| 0. 一枚で | 何ができるようになるかを 1 枚で示す | アピールポイントの表 |
+| 1. 待たずに出せる | 速さと、待たなくてよい理由 | CI の所要時間、パイプラインの図 |
+| 2. EOL の 7.4 まで同じ手順 | サポート切れのバージョンも救える | パッチの出どころと、render.sh の出力 |
+| 3. 自前でも検証できる | 「自前ビルドは怪しい」への答え | SBOM の中身、署名の確かめ方 |
+| 4. 小さく、攻撃面が少ない | イメージの中身を最小にした | nonroot・シェルなし・マルチアーキテクチャ |
+| 5. 運用が軽い | 変わったものだけを作り直す | 入力ハッシュとキャッシュ |
+| 6. 正直な注意点 | 何は保証しないか | EOL パッチとスキャナの限界 |
 
-EOL ブランチ用のパッチは、php-src の `PHP-{7.4,8.0,8.1}-CVE-2026-109618-109619` ブランチにある修正コミット "Avoid state corruption via bailout" を `git format-patch` で取り出したものです。パッチを当てたビルドはリビジョン `-r1` になります。素の tarball ビルドと同じタグを名乗らないように、`7.4.33` のような素のバージョンタグは付けません。
+本文の `output` ブロックは [checks.json](checks.json) のコマンドで再生成して照合しています。CI の所要時間はリンク先の実行結果の値です（再実行はしていない）。想定した読み手は [personas/demo-audience.md](personas/demo-audience.md) です（仮のペルソナ）。
+
+</details>
+
+## 0. 一枚で
+
+| できること | 中身 | 根拠 |
+|---|---|---|
+| 待たずに出せる | php.net の修正版 tarball から、push 後 約 7 分で署名済みイメージを publish | 1 節 |
+| EOL まで救える | 7.4 / 8.0 / 8.1 は、PHP セキュリティチームの公式バックポートを当てて同じ手順で出す | 2 節 |
+| 自前でも検証できる | ソースの sha256 照合、apk の署名、イメージ内の SBOM、cosign 署名、スキャン結果の添付 | 3 節 |
+| 攻撃面が少ない | distroless（シェルなし）、uid 65532 で動く、amd64 と arm64 | 4 節 |
+| 運用が軽い | 入力が同じなら PHP を再コンパイルしない。キャッシュが効いた PR は 1 分 16 秒 | 5 節 |
+
+すべてのイメージは `ghcr.io/yowatari/php-oct2026-hotfix` にあり、認証なしで pull できます。
 
 ```sh
 docker run --rm ghcr.io/yowatari/php-oct2026-hotfix:8.5 -v
-docker run --rm ghcr.io/yowatari/php-oct2026-hotfix:7.4.33-r1 -v
-docker run -d -p 9000:9000 ghcr.io/yowatari/php-oct2026-hotfix:8.5-fpm   # php-fpm -F, listen 9000
+docker run -d -p 9000:9000 ghcr.io/yowatari/php-oct2026-hotfix:8.5-fpm   # php-fpm（listen 9000）
 ```
 
-署名は GitHub Actions のキーレス署名（cosign）です。次のコマンドで確認できます。
+## 1. 待たずに出せる
+
+公式の修正版 tarball が php.net に出たら、バージョン番号を変えて push するだけで、署名済みのイメージが ghcr.io に出ます。**最初の実行では、push から 8.5.12 の署名済みイメージまで約 7 分でした。**
+
+| 実行 | 内容 | 所要時間 |
+|---|---|---|
+| [run #1](https://github.com/yowatari/php-oct2026-hotfix/actions/runs/39644000263) | 初回。push → ビルド → publish → スモークテスト → cosign 署名（8.5.12、x86_64） | 約 6 分 40 秒（17:27:46 → 17:34:28 UTC） |
+| [run #5](https://github.com/yowatari/php-oct2026-hotfix/actions/runs/39706478895) | 7 バージョン × amd64・arm64 をキャッシュなしでビルドしてテスト | 約 9 分 |
+| [run #7](https://github.com/yowatari/php-oct2026-hotfix/actions/runs/39708192105) | 同じ入力でもう一度（キャッシュあり） | 1 分 16 秒 |
+
+待たなくてよいのは、Wolfi のパッケージではなく、php.net の tarball から自分で PHP をビルドしているためです。作業を始めた時点（2026-10-21 16 時台 UTC）で、公開されている Wolfi の `php-8.5` は 8.5.11、`php-8.4` は 8.4.26 で、まだ修正前でした（観測時点の値。今は更新されている可能性がある）。
+
+使っている道具は 3 つです。Wolfi は Chainguard が公開しているコンテナ向けの Linux ディストリビューションで、イメージの土台になります。melange は Dockerfile の代わりに PHP を Wolfi の apk パッケージとしてビルドし、apko はその apk だけを並べてイメージを組み立てます。
+
+ビルドからイメージまでの流れは次のとおりです（図の出どころは `.github/workflows/build.yml` のジョブの順）。
+
+![パイプライン：php.net の tarball とパッチから、melange で apk を作り、apko でイメージにして ghcr.io に出し、署名とスキャン結果を付ける](figures/pipeline.svg)
+
+CI では、Chainguard が公開している Action（[melange-build](https://github.com/chainguard-dev/actions)、[apko-publish と vul-scans](https://github.com/chainguard-images/actions)）をそのまま使っています。
+
+## 2. EOL の 7.4 まで同じ手順
+
+PHP 8.1 以前はサポートが終わっていて、公式の修正版 tarball は出ません。代わりに PHP セキュリティチームが、7.4 / 8.0 / 8.1 向けに最小限のバックポートを php-src のブランチで公開しました（[php.net の告知](https://www.php.net/archive/2026.php#2026-10-21-5)）。
+
+このリポジトリは、そのコミットを `patches/<ブランチ>/` に置き、最終版の tarball に当ててビルドします。パッチの中身は、公式の修正コミットそのものです。
+
+<!-- output: patch-74 -->
+```
+Subject: [PATCH] Avoid state corruption via bailout
+Fix GHSA-w8hw-w9fx-j79w (CVE-2026-109618)
+Fix GHSA-6wmf-4rv5-p3rp (CVE-2026-109619)
+```
+
+`scripts/render.sh` は、php.net から tarball の sha256 を取り、パッチの有無を見て設定を作ります。パッチを当てたビルドはパッケージのリビジョンが `-r1`（`epoch=1`）になり、素の 7.4.33（`-r0`）と区別できます。
+
+<!-- output: render-74 -->
+```
+version=7.4.33
+epoch=1
+sha256=924846abf93bc613815c55dd3f5809377813ac62a9ec4eb3778675b82a27b927
+patches=1
+legacy=1
+```
+
+`legacy=1` は、今の Wolfi の OpenSSL と libxml2 が 7.4 には新しすぎるため、OpenSSL 1.1.1w と libxml2 2.11.9 を同じパイプライン内でビルドして使う、という意味です。こうして、次のとおり 7 バージョンすべてのイメージを出しています。
+
+<!-- output: run-all -->
+```
+8.5 -> PHP 8.5.12 uid=65532
+8.4 -> PHP 8.4.27 uid=65532
+8.3 -> PHP 8.3.36 uid=65532
+8.2 -> PHP 8.2.35 uid=65532
+8.1 -> PHP 8.1.34 uid=65532
+8.0 -> PHP 8.0.30 uid=65532
+7.4 -> PHP 7.4.33 uid=65532
+```
+
+## 3. 自前でも検証できる
+
+自前ビルドで気になるのは「中に何が入っているか、誰が作ったか」を確かめられるかです。このパイプラインは、その確認を段ごとに組み込んでいます。
+
+| 段 | 何を確かめるか |
+|---|---|
+| ソース | php.net が公開している sha256 と照合してから展開する |
+| apk | melange が署名し、apko は署名を検証できた apk だけを入れる |
+| イメージ | apko がパッケージごとの SBOM（SPDX 形式）をイメージ内の `/var/lib/db/sbom/` に入れる |
+| 配布 | cosign で署名する。鍵は持たず、GitHub Actions が発行する ID（OIDC トークン）で一時的な証明書を取る「キーレス署名」 |
+| スキャン | 脆弱性スキャナ Trivy と Grype の結果を、署名付きの添付情報（attestation）としてイメージに付ける |
+
+**SBOM には、PHP のソースだけでなく、同梱した OpenSSL と libxml2 の取得元まで記録されています。** 7.4 のイメージで、php-hotfix の SBOM に書かれた取得元を表示すると次のとおりです。
+
+<!-- output: sbom-74 -->
+```
+https://www.php.net/distributions/php-7.4.33.tar.xz
+https://www.openssl.org/source/openssl-1.1.1w.tar.gz
+https://download.gnome.org/sources/libxml2/2.11/libxml2-2.11.9.tar.xz
+```
+
+署名は、このリポジトリのワークフローが GitHub Actions 上で付けたものかを、次のコマンドで確かめられます。
 
 ```sh
 cosign verify ghcr.io/yowatari/php-oct2026-hotfix:8.5 \
@@ -31,51 +127,115 @@ cosign verify ghcr.io/yowatari/php-oct2026-hotfix:8.5 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
-## 仕組み
+main の CI は、publish のたびにこの verify を実行し、通らなければ失敗します。ただし、この README を書いた時点では、マルチアーキテクチャ化した現在のイメージでこの verify が通るのを、まだ確かめていません（未検証）。
 
+## 4. 小さく、攻撃面が少ない
+
+イメージには PHP と、その実行に必要なライブラリだけが入っています。シェルはなく、プロセスは root ではない一般ユーザー（uid 65532、`nonroot`）で動きます。
+
+<!-- output: no-shell -->
 ```
-scripts/render.sh <version>
-  ├─ php.net/releases の JSON から tarball の sha256 を取得
-  ├─ patches/<major.minor>/*.patch を build/<version>/src/patches にコピー
-  └─ melange.tmpl.yaml / apko.tmpl.yaml から build/<version>/ を生成
-melange build   Wolfi 上で公式 tarball を取得（sha256 で検証）→ パッチ適用 → ビルド
-                → 署名付き apk 3 つに分割し、それぞれの test: を実行
-                    php-hotfix      php CLI, php.ini, 拡張
-                    php-hotfix-fpm  php-fpm と設定（listen 9000, stderr ログ）
-                    php-hotfix-dev  phpize, php-config, ヘッダ（拡張モジュールのビルド用）
-apko publish    Wolfi ベースの distroless イメージ 2 種（nonroot, uid 65532, シェルなし）＋ SBOM を push
-                    apko.yaml      php-hotfix                  → :<tag>
-                    apko-fpm.yaml  php-hotfix + php-hotfix-fpm → :<tag>-fpm
-cosign sign     GitHub OIDC によるキーレス署名
-vul-scans       Trivy / Grype でスキャンし、結果を cosign の vuln attestation としてイメージに添付
+stat /bin/sh: no such file or directory
 ```
 
-- イメージは `linux/amd64` と `linux/arm64` のマルチアーキテクチャです。melange は各アーキテクチャのネイティブランナー（`ubuntu-latest` と `ubuntu-24.04-arm`）でビルドし、apko が両方の apk から 1 つのイメージ（OCI index）にまとめます。
+CLI 用（`:8.5`）と FPM 用（`:8.5-fpm`）は別のイメージで、CLI 用には php-fpm もヘッダも入っていません。どちらも amd64 と arm64 のマルチアーキテクチャです。
 
-## CI（`.github/workflows/build.yml`）
+<!-- output: platforms -->
+```
+Platform:  linux/amd64
+Platform:  linux/arm64
+```
 
-| イベント | 動作 |
+arm64 は、CI の `ubuntu-24.04-arm` ランナーで、エミュレーションを使わずにネイティブでビルドしています。
+
+シェルがないので、Dockerfile でこのイメージを `FROM` にしたときは `RUN` が使えません。アプリは `COPY` で載せます。拡張モジュールを足すなら、`melange.tmpl.yaml` の configure を変えるか、別の melange パッケージにして apko の `packages` に加えます（この手順はまだ試していない）。
+
+## 5. 運用が軽い
+
+CI は、入力が変わったものだけを作り直します。`scripts/render.sh` は、melange の設定とパッチから `melange_hash` を、それに apko の設定を加えて `image_hash` を出します。CI はこの 2 つを次のように使います。
+
+| 状況 | 動き |
 |---|---|
-| pull request | ビルドとテストだけを行います（amd64 と、qemu での arm64）。ghcr への push はしません |
-| main への push / `workflow_dispatch` | 入力が変わったバージョンだけをビルドして publish、署名、スキャンします |
-| schedule（毎日） | apko だけを再実行して、Wolfi のベースパッケージの更新をイメージに取り込みます（PHP は再ビルドしません） |
+| `melange_hash` が同じ | キャッシュから apk を取り出し、PHP をコンパイルしない |
+| `image_hash` の目印タグ `build-<hash>` が ghcr にある | 公開済みなので、そのバージョンは何もしない（main のみ） |
+| PR | ビルドとテストだけ。ghcr には push しない |
+| 毎日の schedule | apko だけを実行し、Wolfi のベースパッケージの修正を取り込む |
 
-毎回すべてをビルドしないように、次の仕組みを入れています。
+## 6. 正直な注意点
 
-- **バージョン単位のスキップ:** `scripts/render.sh` は、melange と apko の設定とパッチから `image_hash` を計算します。`ghcr.io/...:build-<image_hash>` タグがすでにあれば、そのバージョンは何もしません。このタグは publish・署名・verify が終わった最後に付けるので、途中で失敗した場合は次回やり直されます。
-- **apk のキャッシュ:** melange の成果物を、`melange_hash` とアーキテクチャをキーにして `actions/cache` に保存します。apko 側の設定だけを変えた場合は、PHP をコンパイルし直しません。
-- 同じブランチの古い実行は、`concurrency` で自動的にキャンセルします。
-- `workflow_dispatch` の `versions` に `["7.4.33"]` のような JSON を渡すと、そのバージョンだけを対象にします。`force` を有効にすると、入力が変わっていなくても publish し直します。
-- 7.4 / 8.0 / 8.1 は、Wolfi が提供する OpenSSL 3.6 と libxml2 2.15 ではビルドできません。`legacy-deps.inc.yaml` で OpenSSL 1.1.1w（共有ライブラリ）と libxml2 2.11.9（静的リンク）を同じパイプライン内でビルドして使います。
+EOL の 7.4 / 8.0 / 8.1 に当てたパッチは、今回の 2 件だけを塞ぐ最小限の緩和策です。ほかの未修正の脆弱性は残り、同梱した OpenSSL 1.1.1w もアップストリームのサポートが終わっています。8.2 以降へ移るまでのつなぎとして使ってください。
 
-## 新しい修正が出たら
+脆弱性スキャナが「修正済み」と判定するかは、スキャナ側のデータ次第です。このイメージの PHP は独自のパッケージ名（`php-hotfix`）なので、スキャナの結果は修正の証明になりません。修正済みかは、バージョン・パッチ・SBOM で確かめてください。
 
-- **修正済み tarball がリリースされた場合:** `DEFAULT_VERSIONS`（workflow）のバージョンを上げるだけです。sha256 は render.sh が php.net から取得します。
-- **tarball はまだなく、パッチだけが出た場合:** `patches/<major.minor>/NNNN-*.patch` を置いて push します。ビルドは `-r1` になります。
+脆弱性そのものを突いて、塞がっていることを確かめるテストはしていません。
 
-## ローカルでのビルド
+## 次の CVE が来たら
 
-CI では [chainguard-dev/actions](https://github.com/chainguard-dev/actions) の `melange-build` と、[chainguard-images/actions](https://github.com/chainguard-images/actions) の `apko-publish` / `vul-scans` を使っています。手元では同じことをコンテナで実行できます。
+| 状況 | やること |
+|---|---|
+| 修正版 tarball が php.net に出た | `.github/workflows/build.yml` の `DEFAULT_VERSIONS` を上げて main に入れる。sha256 は render.sh が取る |
+| tarball はまだで、パッチだけが出た | `patches/<major.minor>/NNNN-*.patch` を置いて main に入れる。ビルドは `-r1` になる |
+| 1 バージョンだけ急いで出したい | `workflow_dispatch` の `versions` に `["8.5.13"]` のような JSON を渡す |
+
+## 理解度チェック
+
+1. Trivy の結果が緑なら、このイメージは CVE-2026-109618 が修正済みだと言えるか。
+
+<details><summary>答え</summary>
+
+言えません。PHP は独自のパッケージ名（`php-hotfix`）で入っているので、スキャナは PHP の脆弱性データと結び付けられないことがあります。修正済みかは、`php -v` のバージョン、`patches/` の中身、SBOM の取得元で確かめます（2 節と 3 節）。
+
+</details>
+
+2. 7.4 のイメージに切り替えれば、7.4 を使い続けても安全か。
+
+<details><summary>答え</summary>
+
+安全ではありません。塞いだのは今回の 2 件だけで、同梱の OpenSSL 1.1.1w もサポートが終わっています。移行までのつなぎです（6 節）。
+
+</details>
+
+3. apko の設定だけを変えて push したとき、PHP は再コンパイルされるか。
+
+<details><summary>答え</summary>
+
+されません。`melange_hash` は melange の設定とパッチだけから計算されるので変わらず、apk はキャッシュから取り出されます。`image_hash` は変わるので、イメージは作り直されます（5 節）。
+
+</details>
+
+4. `cosign verify` が通ったとき、何が分かるか。
+
+<details><summary>答え</summary>
+
+そのイメージが、このリポジトリの `.github/workflows/build.yml` によって GitHub Actions 上で署名されたことが分かります。中身が安全かどうかは分かりません。中身は SBOM で確かめます（3 節）。
+
+</details>
+
+## 付録
+
+### タグ
+
+| ブランチ | ソース | タグ（CLI / FPM） |
+|---|---|---|
+| 8.5 / 8.4 / 8.3 / 8.2 | php.net の修正済み tarball（8.5.12 / 8.4.27 / 8.3.36 / 8.2.35） | `8.5.12`, `8.5.12-r0`, `8.5` / `8.5.12-fpm`, `8.5-fpm` など |
+| 8.1 / 8.0 / 7.4（EOL） | 最終 tarball（8.1.34 / 8.0.30 / 7.4.33）＋ 公式バックポート | `7.4.33-r1`, `7.4` / `7.4.33-r1-fpm`, `7.4-fpm` など |
+
+拡張モジュールは最小構成です（mbstring, openssl, curl, zlib, mysqli / pdo_mysql, pdo_sqlite, bcmath, sockets, pcntl など。8.5 は OPcache を内蔵し、8.4 以前は opcache.so をビルドするが既定では無効）。必要なら `melange.tmpl.yaml` の configure を編集してください。
+
+### ファイル
+
+| パス | 内容 |
+|---|---|
+| `melange.tmpl.yaml` | PHP のビルド定義。`php-hotfix` / `-fpm` / `-dev` のサブパッケージとテスト |
+| `legacy-deps.inc.yaml` | 7.4 / 8.0 / 8.1 用の OpenSSL 1.1.1w と libxml2 2.11.9 |
+| `apko.tmpl.yaml` | イメージの定義（CLI と FPM） |
+| `patches/<branch>/` | EOL ブランチ用の公式バックポート |
+| `scripts/render.sh` | バージョンから melange と apko の設定とハッシュを作る |
+| `scripts/smoke.sh` | イメージのスモークテスト |
+| `.github/workflows/build.yml` | ビルド・publish・署名・スキャン |
+| `checks.json`, `figures/` | この README の出力と図を検証するためのファイル |
+
+### ローカルでのビルド
 
 ```sh
 scripts/render.sh 8.5.12
@@ -88,9 +248,3 @@ docker run --rm -v "$PWD":/work -w /work cgr.dev/chainguard/apko \
   -r /work/build/8.5.12/packages -k /work/melange.rsa.pub   # FPM は apko-fpm.yaml
 docker load < build/8.5.12/image.tar
 ```
-
-## 注意事項
-
-- EOL ブランチのバックポートは、セキュリティチームによる「最小限の緩和策」です。ほかの未修正の脆弱性は残っています。また同梱している OpenSSL 1.1.1w もアップストリームのサポートが終了しています。8.2 以降への移行までのつなぎとして使ってください。
-- 脆弱性スキャナが修正済みと判定するかどうかは、スキャナ側のデータ次第です。このイメージの PHP は Wolfi の `php-*` パッケージではなく独自パッケージ `php-hotfix` なので、パッチ適用済みかどうかは SBOM とイメージの annotation で確認してください。
-- 拡張モジュールは最小構成です（mbstring, openssl, curl, zlib, mysqli/pdo_mysql, pdo_sqlite, bcmath, sockets, pcntl など。8.5 は OPcache 内蔵、8.4 以前は opcache.so をビルドするが既定では無効）。必要に応じて `melange.tmpl.yaml` の configure を編集してください。

@@ -4,3 +4,6 @@ packages/
 *.rsa.pub
 *.tar
 sbom-*.json
+dist/
+figures/.figure-check/
+.first-reader/
