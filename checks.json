@@ -73,6 +73,15 @@
       "expect": [
         "hello from 8.5.12"
       ]
+    },
+    {
+      "name": "cosign-verify",
+      "cmd": "cosign verify ghcr.io/yowatari/php-oct2026-hotfix:8.5 --certificate-identity-regexp '^https://github.com/yowatari/php-oct2026-hotfix/.github/workflows/build.yml@' --certificate-oidc-issuer https://token.actions.githubusercontent.com 2>&1 >/dev/null",
+      "expect": [
+        "Verification for ghcr.io/yowatari/php-oct2026-hotfix:8.5 --",
+        "The cosign claims were validated",
+        "The code-signing certificate was verified using trusted certificate authority certificates"
+      ]
     }
   ]
 }

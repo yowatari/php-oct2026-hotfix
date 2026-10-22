@@ -50,6 +50,7 @@ docker run -d -p 9000:9000 ghcr.io/yowatari/php-oct2026-hotfix:8.5-fpm   # php-f
 | [run #1](https://github.com/yowatari/php-oct2026-hotfix/actions/runs/39644000263) | 初回。push → ビルド → publish → スモークテスト → cosign 署名（8.5.12、x86_64） | 約 6 分 40 秒（17:27:46 → 17:34:28 UTC） |
 | [run #5](https://github.com/yowatari/php-oct2026-hotfix/actions/runs/39706478895) | 7 バージョン × amd64・arm64 をキャッシュなしでビルドしてテスト | 約 9 分 |
 | [run #7](https://github.com/yowatari/php-oct2026-hotfix/actions/runs/39708192105) | 同じ入力でもう一度（キャッシュあり） | 1 分 16 秒 |
+| [run #12](https://github.com/yowatari/php-oct2026-hotfix/actions/runs/39712391135) | main で 7 バージョン × amd64・arm64 を publish し、スモークテスト・署名・verify・スキャンまで（キャッシュあり） | 約 4 分 |
 
 待たなくてよいのは、Wolfi のパッケージではなく、php.net の tarball から自分で PHP をビルドしているためです。作業を始めた時点（2026-10-21 16 時台 UTC）で、公開されている Wolfi の `php-8.5` は 8.5.11、`php-8.4` は 8.4.26 で、まだ修正前でした（観測時点の値です。今は更新されている可能性があります）。
 
@@ -127,7 +128,14 @@ cosign verify ghcr.io/yowatari/php-oct2026-hotfix:8.5 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
-main の CI は、publish のたびにこの verify を実行し、通らなければ失敗します。ただし、この README を書いた時点では、マルチアーキテクチャ化した現在のイメージでこの verify が通るのを、まだ確かめていません（未検証）。
+<!-- output: cosign-verify -->
+```
+Verification for ghcr.io/yowatari/php-oct2026-hotfix:8.5 --
+  - The cosign claims were validated
+  - The code-signing certificate was verified using trusted certificate authority certificates
+```
+
+署名はマルチアーキテクチャの index と、その下の amd64・arm64 の各イメージに付いています。main の CI も publish のたびにこの verify を実行し、通らなければ失敗します。
 
 ## 4. 中身が最小で、攻撃面が小さい
 
