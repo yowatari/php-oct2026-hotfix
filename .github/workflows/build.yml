@@ -73,7 +73,7 @@ jobs:
         version: ${{ fromJSON(needs.matrix.outputs.versions) }}
         arch: [x86_64, aarch64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Render melange/apko config
         id: render
@@ -94,7 +94,7 @@ jobs:
       - name: Restore apks
         if: steps.skip.outputs.skip != 'true'
         id: cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ${{ steps.render.outputs.dir }}/packages/${{ matrix.arch }}
@@ -127,7 +127,7 @@ jobs:
 
       - name: Upload apks
         if: steps.skip.outputs.skip != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: apk-${{ matrix.version }}-${{ matrix.arch }}
           path: |
@@ -150,7 +150,7 @@ jobs:
       matrix:
         version: ${{ fromJSON(needs.matrix.outputs.versions) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Render melange/apko config
         id: render
@@ -171,7 +171,7 @@ jobs:
 
       - name: Download apks
         if: steps.skip.outputs.skip != 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: apk-${{ matrix.version }}-*
           merge-multiple: true
@@ -189,7 +189,7 @@ jobs:
           done
           grep -A3 '^  keyring:' "$DIR/apko.yaml"
 
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
         if: steps.skip.outputs.skip != 'true'
 
       # ---- pull requests: build locally and test both arches, no push ----
@@ -280,14 +280,14 @@ jobs:
           scripts/smoke.sh "$REF" "$REF_FPM" "$VERSION" linux/arm64
 
       # apko-publish authenticates on its own; cosign needs a docker login.
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         if: steps.skip.outputs.skip != 'true' && env.PUBLISH == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: sigstore/cosign-installer@v3
+      - uses: sigstore/cosign-installer@v4
         if: steps.skip.outputs.skip != 'true' && env.PUBLISH == 'true'
 
       - name: cosign sign (keyless)
