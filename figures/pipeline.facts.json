@@ -1,5 +1,36 @@
 {
-  "labels": ["php.net", "sha256", "patches", "render.sh", "melange x86_64", "melange aarch64", "ubuntu-24.04-arm", "apk", "SBOM", "apko", "nonroot", "ghcr.io", "amd64 + arm64", "cosign", "Trivy"],
-  "forbidden": ["Dockerfile", "docker build"],
-  "edges": ["src->render", "pat->render", "render->mx", "render->ma", "mx->apk", "ma->apk", "apk->apko", "apko->ghcr", "ghcr->sign", "ghcr->scan"]
+  "labels": [
+    "php.net",
+    "sha256",
+    "patches",
+    "render.sh",
+    "melange x86_64",
+    "melange aarch64",
+    "ubuntu-24.04-arm",
+    "apk",
+    "SBOM",
+    "apko",
+    "nonroot",
+    "ghcr.io",
+    "amd64 + arm64",
+    "cosign",
+    "Trivy"
+  ],
+  "forbidden": [
+    "Dockerfile",
+    "docker build",
+    "ubuntu-latest"
+  ],
+  "edges": [
+    "src->render",
+    "pat->render",
+    "render->mx",
+    "render->ma",
+    "mx->apk",
+    "ma->apk",
+    "apk->apko",
+    "apko->ghcr",
+    "ghcr->sign",
+    "ghcr->scan"
+  ]
 }

@@ -53,7 +53,7 @@ env:
 
 jobs:
   matrix:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       versions: ${{ steps.v.outputs.versions }}
     steps:
@@ -63,9 +63,12 @@ jobs:
         run: echo "versions=${INPUT:-$DEFAULT_VERSIONS}" >> "$GITHUB_OUTPUT"
 
   # One native build per arch; no emulation in the compile path.
+  # Runners are pinned to 24.04 (x64 and arm) instead of ubuntu-latest, which
+  # moves to 26.04 from 2026-10-19: melange-build's bubblewrap/AppArmor setup
+  # targets 24.04, and both arches should build on the same base.
   packages:
     needs: matrix
-    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -139,7 +142,7 @@ jobs:
   # Assemble one multi-arch image per flavour from both arches' apks.
   image:
     needs: [matrix, packages]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
