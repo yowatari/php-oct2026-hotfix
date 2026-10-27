@@ -60,7 +60,7 @@ Three tools are used. Wolfi is a Linux distribution for containers published by 
 
 The flow from build to image is as follows (the diagram follows the job order in `.github/workflows/build.yml`).
 
-![Pipeline: from the php.net tarball and patches, melange builds apks, apko turns them into images, which are published to ghcr.io with signatures and scan results attached](figures/pipeline.svg)
+![Pipeline: from the php.net tarball and patches, melange builds apks, apko turns them into images, which are published to ghcr.io with signatures and scan results attached](figures/pipeline.en.svg)
 
 In CI, the Actions published by Chainguard ([melange-build](https://github.com/chainguard-dev/actions), [apko-publish and vul-scans](https://github.com/chainguard-images/actions)) are used as is.
 
