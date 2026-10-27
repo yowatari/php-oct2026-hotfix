@@ -203,40 +203,6 @@ This repository is a demo, and the images are hosted on a personal account's (`y
 | No tarball yet, only a patch | Put `patches/<major.minor>/NNNN-*.patch` in place and merge to main. The build becomes `-r1` |
 | Need to ship just one version urgently | Pass JSON such as `["8.5.13"]` to `versions` in `workflow_dispatch` |
 
-## Comprehension check
-
-1. If Trivy's results are green, can you say this image has CVE-2026-109618 fixed?
-
-<details><summary>Answer</summary>
-
-No. PHP is installed under its own package name (`php-hotfix`), so the scanner may not be able to match it to PHP vulnerability data. Confirm the fix with the version from `php -v`, the contents of `patches/`, and the sources in the SBOM (sections 2 and 3).
-
-</details>
-
-2. If you switch to the 7.4 image, is it safe to keep using 7.4?
-
-<details><summary>Answer</summary>
-
-No. Only these two issues were addressed, and the bundled OpenSSL 1.1.1w is also out of support. It's a stopgap until you migrate (section 6).
-
-</details>
-
-3. If you change only the apko configuration and push, is PHP recompiled?
-
-<details><summary>Answer</summary>
-
-No. `melange_hash` is computed only from the melange configuration and patches, so it doesn't change and the apks are restored from cache. `image_hash` does change, so the images are rebuilt (section 5).
-
-</details>
-
-4. What do you learn when `cosign verify` passes?
-
-<details><summary>Answer</summary>
-
-That the image was signed on GitHub Actions by this repository's `.github/workflows/build.yml`. It doesn't tell you whether the contents are safe; check the contents with the SBOM (section 3).
-
-</details>
-
 ## Appendix
 
 ### Tags

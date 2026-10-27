@@ -203,40 +203,6 @@ EOL の 7.4 / 8.0 / 8.1 に当てたパッチは、今回の 2 件だけに対�
 | tarball はまだで、パッチだけが出た | `patches/<major.minor>/NNNN-*.patch` を置いて main に入れる。ビルドは `-r1` になる |
 | 1 バージョンだけ急いで出したい | `workflow_dispatch` の `versions` に `["8.5.13"]` のような JSON を渡す |
 
-## 理解度チェック
-
-1. Trivy の結果が緑なら、このイメージは CVE-2026-109618 が修正済みだと言えるか。
-
-<details><summary>答え</summary>
-
-言えません。PHP は独自のパッケージ名（`php-hotfix`）で入っているので、スキャナは PHP の脆弱性データと結び付けられないことがあります。修正済みかは、`php -v` のバージョン、`patches/` の中身、SBOM の取得元で確かめます（2 節と 3 節）。
-
-</details>
-
-2. 7.4 のイメージに切り替えれば、7.4 を使い続けても安全か。
-
-<details><summary>答え</summary>
-
-安全ではありません。対処したのは今回の 2 件だけで、同梱の OpenSSL 1.1.1w もサポートが終わっています。移行までのつなぎです（6 節）。
-
-</details>
-
-3. apko の設定だけを変えて push したとき、PHP は再コンパイルされるか。
-
-<details><summary>答え</summary>
-
-されません。`melange_hash` は melange の設定とパッチだけから計算されるので変わらず、apk はキャッシュから取り出されます。`image_hash` は変わるので、イメージは作り直されます（5 節）。
-
-</details>
-
-4. `cosign verify` が通ったとき、何が分かるか。
-
-<details><summary>答え</summary>
-
-そのイメージが、このリポジトリの `.github/workflows/build.yml` によって GitHub Actions 上で署名されたことが分かります。中身が安全かどうかは分かりません。中身は SBOM で確かめます（3 節）。
-
-</details>
-
 ## 付録
 
 ### タグ
